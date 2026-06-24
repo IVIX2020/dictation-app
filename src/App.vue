@@ -88,7 +88,7 @@ function saveCurrentProgress() {
 // --- LESSONS LOAD ---
 async function loadLessons() {
   try {
-    const res = await fetch('/lessons/lessons.json')
+    const res = await fetch('/dictation-app/lessons/lessons.json')
     if (!res.ok) {
       lessons.value = []
       return
@@ -99,7 +99,7 @@ async function loadLessons() {
     lessons.value = await Promise.all(rawLessons.map(async (lesson) => {
       let segmentCount = 0
       try {
-        const audioRes = await fetch(`/lessons/${lesson.id}/audio.json`)
+        const audioRes = await fetch(`/dictation-app/lessons/${lesson.id}/audio.json`)
         if (audioRes.ok) {
           const audioData = await audioRes.json()
           const rawSegs = audioData.segments || []
@@ -143,16 +143,16 @@ async function loadLessonDetail(lessonId) {
   errorMessage.value = ''
   try {
     // 1. Load Metadata
-    const metaRes = await fetch(`/lessons/${lessonId}/metadata.json`)
+    const metaRes = await fetch(`/dictation-app/lessons/${lessonId}/metadata.json`)
     if (!metaRes.ok) throw new Error('Metadata not found')
     currentLessonMetadata.value = await metaRes.json()
     
     // 2. Load audio.json
-    const audioRes = await fetch(`/lessons/${lessonId}/audio.json`)
+    const audioRes = await fetch(`/dictation-app/lessons/${lessonId}/audio.json`)
     if (!audioRes.ok) throw new Error('Transcription file not found')
     const audioData = await audioRes.json()
     
-    audioSrc.value = `/lessons/${lessonId}/audio.mp3`
+    audioSrc.value = `/dictation-app/lessons/${lessonId}/audio.mp3`
     
     // 3. Load Progress
     progressData.value = loadProgress(lessonId)
