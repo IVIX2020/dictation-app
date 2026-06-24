@@ -1,74 +1,42 @@
 <template>
-  <v-container class="pa-6 text-center">
+  <v-container class="pa-6">
 
-    <h2 class="mb-6">Dictation App</h2>
+    <h2 class="mb-4">Lessons</h2>
 
-    <!-- file input -->
-    <v-file-input
-      v-model="file"
-      label="Import lesson.zip"
-      accept=".zip"
-      prepend-icon="mdi-folder-zip"
-    />
-
-    <!-- import button -->
-    <v-btn
-      class="mt-4"
-      color="primary"
-      :disabled="!file"
-      @click="handleImport"
-    >
-      Import Lesson
+    <v-btn class="mb-4" @click="loadLessons">
+      Reload
     </v-btn>
 
-    <!-- status -->
-    <div class="mt-6">
-      <v-alert v-if="status" type="info">
-        {{ status }}
-      </v-alert>
-    </div>
+    <v-card
+      v-for="lesson in lessons"
+      :key="lesson.id"
+      class="mb-3 pa-3"
+      @click="openLesson(lesson)"
+      style="cursor:pointer;"
+    >
+      <div><strong>{{ lesson.title }}</strong></div>
+      <div class="text-caption">{{ lesson.id }}</div>
+    </v-card>
 
   </v-container>
 </template>
 
 <script setup>
 import { ref } from 'vue'
-import JSZip from 'jszip'
 
-const file = ref(null)
-const status = ref('')
+const lessons = ref([])
 
-async function handleImport() {
-  try {
-    status.value = 'Reading zip...'
-
-    const zip = await JSZip.loadAsync(file.value)
-
-    const metadata = JSON.parse(
-      await zip.file('metadata.json').async('string')
-    )
-
-    const transcript = JSON.parse(
-      await zip.file('transcript.json').async('string')
-    )
-
-    const audioBlob = await zip.file('audio.mp3').async('blob')
-
-    // 仮保存（まずはメモリだけ）
-    const lesson = {
-      id: metadata.id,
-      title: metadata.title,
-      transcript,
-      audioBlob,
+function loadLessons() {
+  // 仮データ（まずは動作確認用）
+  lessons.value = [
+    {
+      id: '20260625_065744',
+      title: 'Sample Lesson 1'
     }
+  ]
+}
 
-    console.log('Imported lesson:', lesson)
-
-    status.value = `Imported: ${lesson.title}`
-
-  } catch (e) {
-    console.error(e)
-    status.value = 'Import failed'
-  }
+function openLesson(lesson) {
+  console.log('open:', lesson)
 }
 </script>
