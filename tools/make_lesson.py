@@ -35,7 +35,7 @@ def update_lessons_json():
                     "createdAt": created_at,
                     "language": meta.get("language", "en"),
                     "source": meta.get("source", ""),
-                    "audio": f"/lessons/{dirname}/audio.mp3" # フロントエンドでfetchするためのパス
+                    "audio": f"/lessons/{dirname}/audio.mp3" # ルートからの絶対パス
                 }
                 lessons.append(lesson_info)
             except Exception as e:
