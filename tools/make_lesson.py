@@ -6,7 +6,7 @@ from datetime import datetime
 
 def update_lessons_json():
     lessons = []
-    lessons_dir = "lessons"
+    lessons_dir = "public/lessons"
     if not os.path.exists(lessons_dir):
         return
 
