@@ -24,14 +24,18 @@ const masked = ref(true)
 const keepShowing = ref(false)
 const simplified = ref(false)
 
+// Touch & Gesture state
+const touchStartX = ref(0)
+const touchStartY = ref(0)
+
 // Double / Triple click handlers
 const lastClickTimeOn = ref({ time: 0, element: '' })
 const lastDoubleClickTimeOn = ref({ time: 0, element: '' })
 const lastClickTime = ref(0)
 const lastDoubleClickTime = ref(0)
-const doubleClickTime = 300;
-const tripleClickTime = 300;
-let doubleClickTimeout = null;
+const doubleClickTime = 300
+const tripleClickTime = 300
+let doubleClickTimeout = null
 
 // Constants
 const gapThreshold = 0.1
@@ -51,7 +55,7 @@ function loadProgress(lessonId) {
   }
   return {
     currentSegmentId: 0,
-    segments: {} // segmentIndex -> { studied: false, bookmarked: false, markedWords: [] }
+    segments: {}
   }
 }
 
@@ -95,7 +99,6 @@ async function loadLessons() {
     }
     const rawLessons = await res.json()
     
-    // Fetch summaries asynchronously
     lessons.value = await Promise.all(rawLessons.map(async (lesson) => {
       let segmentCount = 0
       try {
@@ -142,28 +145,23 @@ async function loadLessonDetail(lessonId) {
   loadingDetail.value = true
   errorMessage.value = ''
   try {
-    // 1. Load Metadata
     const metaRes = await fetch(`/dictation-app/lessons/${lessonId}/metadata.json`)
     if (!metaRes.ok) throw new Error('Metadata not found')
     currentLessonMetadata.value = await metaRes.json()
     
-    // 2. Load audio.json
     const audioRes = await fetch(`/dictation-app/lessons/${lessonId}/audio.json`)
     if (!audioRes.ok) throw new Error('Transcription file not found')
     const audioData = await audioRes.json()
     
     audioSrc.value = `/dictation-app/lessons/${lessonId}/audio.mp3`
     
-    // 3. Load Progress
     progressData.value = loadProgress(lessonId)
     currentSegmentId.value = progressData.value.currentSegmentId || 0
     
-    // 4. Split segments
     const rawSegments = audioData.segments || []
     const lang = currentLessonMetadata.value?.language || 'en'
     currentLessonSegments.value = filteredSegments(rawSegments, lang)
     
-    // 5. Restore segment status
     currentLessonSegments.value.forEach((seg, idx) => {
       const segProg = progressData.value.segments[idx] || { studied: false, bookmarked: false, markedWords: [] }
       seg.studied = segProg.studied
@@ -302,38 +300,72 @@ function splitSegment(segment, gapThreshold) {
       ...segment,
       words: currentWords,
       start: currentStart,
-      end: getSegmentEnd({ words: currentWords })
+      end: words.at(-1)?.end ?? segment.end
     })
   }
   return segments
 }
 
-function filteredWords(words = []) {
-  return words.filter((w, i, arr) => i === 0 || w.start !== arr[i - 1].start)
+// --- COMPUTED PROPERTIES ---
+const getCurrentSegment = computed(() => {
+  return currentLessonSegments.value?.[currentSegmentId.value] || null
+})
+
+const currentProgressPercent = computed(() => {
+  if (!currentLessonSegments.value || currentLessonSegments.value.length === 0) return 0
+  return Math.round(((currentSegmentId.value + 1) / currentLessonSegments.value.length) * 100)
+})
+
+// Chinese traditional / simplified converter
+const converterZh = OpenCC.Converter({ from: 'hk', to: 'cn' })
+
+function filteredWords(words) {
+  if (!words) return []
+  if (currentLessonMetadata.value?.language === 'zh' && simplified.value) {
+    return words.map(w => ({
+      ...w,
+      word: converterZh(w.word)
+    }))
+  }
+  return words
 }
 
-// --- PLAYER CONTROLS ---
-function playFrom(start, stop = -1) {
+function isHighlighted(word) {
+  if (!playing.value) return false
+  return currentTime.value >= word.start && currentTime.value < word.end
+}
+
+function getMaskedWord(word) {
+  if (!word) return ''
+  // Return clean bullet dots for masking
+  return '•'.repeat(Math.max(word.length, 2))
+}
+
+// --- AUDIO PLAYER & TIMING ---
+function playFrom(start, end) {
   if (!audioPlayer.value) return
+  stopTime.value = end
   audioPlayer.value.currentTime = start
   audioPlayer.value.playbackRate = playSpeed.value
   audioPlayer.value.play().then(() => {
     playing.value = true
-    stopTime.value = stop
-  }).catch(err => {
-    console.error('Audio playback failed:', err)
-  })
+  }).catch(e => console.error('Play error', e))
 }
 
 function onTimeUpdate() {
   if (!audioPlayer.value) return
-  const curr = audioPlayer.value.currentTime
-  currentTime.value = curr
-  
-  if (stopTime.value > 0 && curr >= stopTime.value) {
+  currentTime.value = audioPlayer.value.currentTime
+  if (stopTime.value > 0 && currentTime.value >= stopTime.value) {
     audioPlayer.value.pause()
-    stopTime.value = -1
     playing.value = false
+    stopTime.value = -1
+    
+    // Mark studied
+    const seg = currentLessonSegments.value?.[currentSegmentId.value]
+    if (seg && !seg.studied) {
+      seg.studied = true
+      saveCurrentProgress()
+    }
   }
 }
 
@@ -341,52 +373,20 @@ function onPause() { playing.value = false }
 function onPlay() { playing.value = true }
 function onEnded() { playing.value = false }
 
-watch(playSpeed, (val) => {
-  if (audioPlayer.value) audioPlayer.value.playbackRate = val
-})
-
-// --- COMPUTED / CHINESE ---
-const isCJK = computed(() => {
-  const lang = currentLessonMetadata.value?.language || 'en'
-  return ['zh', 'ja', 'ko'].includes(lang)
-})
-
-function getMaskedWord(word) {
-  return isCJK.value ? '○'.repeat(word.length) : '*'.repeat(word.length)
-}
-
-const getCurrentSegment = computed(() => {
-  const segment = currentLessonSegments.value?.[currentSegmentId.value]
-  if (segment && !segment.studied) {
-    segment.studied = true
-    saveCurrentProgress()
+watch(playSpeed, (newSpeed) => {
+  if (audioPlayer.value) {
+    audioPlayer.value.playbackRate = newSpeed
   }
-  return applyChangesToSegment(segment)
 })
 
-function applyChangesToSegment(segment) {
-  if (!segment) return null
-  const lang = currentLessonMetadata.value?.language || 'en'
-  if (lang !== 'zh' || !segment.words) return segment
-  
-  const converter = simplified.value
-    ? OpenCC.Converter({ from: 'tw', to: 'cn' })
-    : OpenCC.Converter({ from: 'cn', to: 'tw' })
-    
-  return {
-    ...segment,
-    words: segment.words.map(word => ({
-      ...word,
-      word: converter(word.word)
-    }))
+watch(currentSegmentId, () => {
+  if (playing.value && audioPlayer.value) {
+    const seg = getCurrentSegment.value
+    if (seg) playFrom(getSegmentStart(seg), getSegmentEnd(seg))
   }
-}
+})
 
-function isHighlighted(word) {
-  return currentTime.value >= word.start && currentTime.value <= word.end
-}
-
-// --- INTERACTIVE / GESTURES ---
+// --- MOUSE & TOUCH GESTURES ---
 function handleMouseDown(event, segment) {
   const rect = event.currentTarget.getBoundingClientRect()
   const clickX = event.clientX - rect.left
@@ -411,6 +411,8 @@ function handleMouseDown(event, segment) {
 function handleTouchStart(event, segment) {
   event.preventDefault()
   const touch = event.touches[0]
+  touchStartX.value = touch.clientX
+  touchStartY.value = touch.clientY
   const rect = event.currentTarget.getBoundingClientRect()
   const clickX = touch.clientX - rect.left
   const isLeft = clickX < rect.width / 2
@@ -429,6 +431,33 @@ function handleTouchStart(event, segment) {
   }
 
   lastClickTime.value = currTime
+}
+
+function handleTouchEnd(event) {
+  if (!event.changedTouches || event.changedTouches.length === 0) return
+  const touchEnd = event.changedTouches[0]
+  const diffX = touchEnd.clientX - touchStartX.value
+  const diffY = touchEnd.clientY - touchStartY.value
+  const minSwipeDistance = 40
+
+  if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > minSwipeDistance) {
+    if (diffX < 0) {
+      getNextSegment()
+    } else {
+      getPreviousSegment()
+    }
+  }
+}
+
+function togglePlayCurrentSegment() {
+  const seg = currentLessonSegments.value?.[currentSegmentId.value]
+  if (!seg) return
+  if (playing.value) {
+    audioPlayer.value?.pause()
+    playing.value = false
+  } else {
+    playFrom(getSegmentStart(seg), getSegmentEnd(seg))
+  }
 }
 
 function handleTap(segment) {
@@ -529,168 +558,147 @@ function toggleGlobalHide(isVisible) {
 
 <template>
   <div class="app-container">
-    <!-- --- NAVIGATION HEADER --- -->
+    <!-- --- MINIMAL HEADER --- -->
     <header class="app-header">
-      <div class="header-left">
-        <button v-if="currentLessonId" class="back-btn" @click="goBackPage">
-          <span class="icon">&larr;</span> Back
-        </button>
-        <span class="app-title" v-else>🎧 Local Dictation</span>
-      </div>
-      <div class="header-right" v-if="currentLessonId && currentLessonMetadata">
-        <span class="lang-tag">{{ currentLessonMetadata.language.toUpperCase() }}</span>
+      <div class="header-inner">
+        <div class="header-left">
+          <button v-if="currentLessonId" class="minimal-back-btn" @click="goBackPage">
+            <span class="icon">‹</span>
+            <span>Lessons</span>
+          </button>
+          <div v-else class="brand-title">
+            <span class="brand-badge">PRO</span>
+            <span>Dictation</span>
+          </div>
+        </div>
+
+        <div class="header-right" v-if="currentLessonId && currentLessonMetadata">
+          <!-- Speed control pill -->
+          <div class="speed-pill">
+            <select v-model="playSpeed" class="speed-select-minimal">
+              <option :value="0.7">0.7x</option>
+              <option :value="0.8">0.8x</option>
+              <option :value="1.0">1.0x</option>
+              <option :value="1.2">1.2x</option>
+              <option :value="1.5">1.5x</option>
+            </select>
+          </div>
+
+          <button v-if="currentLessonMetadata.language === 'zh'" class="minimal-tag-btn" @click="simplified = !simplified">
+            {{ simplified ? '簡' : '繁' }}
+          </button>
+        </div>
       </div>
     </header>
 
     <main class="app-main">
-      <!-- --- ERROR AREA --- -->
-      <div v-if="errorMessage" class="error-banner">
+      <!-- --- ERROR BANNER --- -->
+      <div v-if="errorMessage" class="minimal-error">
         <span>⚠️ {{ errorMessage }}</span>
       </div>
 
-      <!-- --- SECTION 1: LESSONS LIST --- -->
-      <section v-if="!currentLessonId" class="lessons-list-section">
-        <h2 class="section-title">My Lessons</h2>
+      <!-- --- SECTION 1: LESSONS LIST (MINIMAL DASHBOARD) --- -->
+      <section v-if="!currentLessonId" class="lessons-section">
+        <div class="section-header">
+          <h1 class="page-title">My Materials</h1>
+          <span class="count-badge" v-if="lessons.length > 0">{{ lessons.length }} lessons</span>
+        </div>
         
-        <div v-if="lessons.length === 0" class="empty-state">
-          <p>No lessons available yet.</p>
-          <p class="instruction-note">Create lessons using: <code>python tools/make_lesson.py &lt;URL&gt; [LANG]</code></p>
+        <div v-if="lessons.length === 0" class="minimal-empty-state">
+          <div class="empty-icon">🎧</div>
+          <h3>No Lessons Available</h3>
+          <p>Generate new dictation materials via CLI:</p>
+          <code>python tools/make_lesson.py &lt;URL&gt;</code>
         </div>
 
-        <div v-else class="lessons-grid">
+        <div v-else class="lessons-list">
           <div 
             v-for="lesson in lessons" 
             :key="lesson.id" 
-            class="lesson-card" 
+            class="minimal-lesson-card" 
             @click="openLesson(lesson.id)"
           >
-            <div class="lesson-meta-top">
-              <span class="lesson-lang">{{ lesson.language.toUpperCase() }}</span>
-              <span class="lesson-date">{{ lesson.createdAt.split(' ')[0] }}</span>
+            <div class="card-top">
+              <span class="lang-badge">{{ lesson.language.toUpperCase() }}</span>
+              <span class="card-date">{{ lesson.createdAt.split(' ')[0] }}</span>
             </div>
             
-            <h3 class="lesson-card-title">{{ lesson.title }}</h3>
+            <h2 class="card-title">{{ lesson.title }}</h2>
             
-            <div class="lesson-stats">
-              <span>Studied: {{ lesson.studiedCount }} / {{ lesson.segmentCount }}</span>
-              <span v-if="lesson.bookmarkedCount > 0" class="bookmarked-count">★ {{ lesson.bookmarkedCount }}</span>
-            </div>
+            <div class="card-footer">
+              <div class="progress-info">
+                <span class="progress-text">{{ lesson.studiedCount }} / {{ lesson.segmentCount }} sentences</span>
+                <span v-if="lesson.bookmarkedCount > 0" class="bookmark-badge">★ {{ lesson.bookmarkedCount }}</span>
+              </div>
 
-            <!-- Segment Progress Bar -->
-            <div class="segment-bar">
-              <div 
-                v-for="(seg, idx) in lesson.segmentsSummary" 
-                :key="idx" 
-                class="segment-dot"
-                :class="{ studied: seg.studied, bookmarked: seg.bookmarked }"
-                :title="`Segment ${idx+1}: ${seg.bookmarked ? 'Bookmarked' : (seg.studied ? 'Studied' : 'Not started')}`"
-              ></div>
+              <div class="mini-progress-track">
+                <div 
+                  class="mini-progress-fill" 
+                  :style="{ width: `${Math.round((lesson.studiedCount / (lesson.segmentCount || 1)) * 100)}%` }"
+                ></div>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- --- SECTION 2: LESSON DETAIL (DICTATION) --- -->
-      <section v-else class="lesson-detail-section">
-        <!-- Loader -->
-        <div v-if="loadingDetail" class="detail-loader">
-          <div class="spinner"></div>
-          <p>Loading lesson materials...</p>
+      <!-- --- SECTION 2: MOBILE DICTATION WORKSPACE (MINIMAL FOCUS) --- -->
+      <section v-else class="dictation-focus-section">
+        <div v-if="loadingDetail" class="minimal-loader">
+          <div class="pulse-ring"></div>
+          <span>Loading audio & transcript...</span>
         </div>
 
-        <div v-else-if="currentLessonMetadata && currentLessonSegments.length > 0" class="dictation-workspace">
-          <!-- Workspace Title -->
-          <div class="workspace-meta">
-            <h2 class="lesson-title">{{ currentLessonMetadata.title }}</h2>
-            <a :href="currentLessonMetadata.source" target="_blank" class="source-link">Source video &rarr;</a>
+        <div v-else-if="currentLessonMetadata && currentLessonSegments.length > 0" class="focus-workspace">
+          
+          <!-- Sleek Top Progress & Meta -->
+          <div class="workspace-top-bar">
+            <div class="progress-meta">
+              <span class="sentence-counter">Sentence <strong>{{ currentSegmentId + 1 }}</strong> / {{ currentLessonSegments.length }}</span>
+              <span class="percent-tag">{{ currentProgressPercent }}%</span>
+            </div>
+            
+            <!-- Thin Line Progress Bar -->
+            <div class="top-progress-bar">
+              <div class="progress-fill" :style="{ width: `${currentProgressPercent}%` }"></div>
+            </div>
           </div>
 
-          <!-- Dictation Card -->
-          <div class="dictation-card">
-            <!-- Settings inside the card -->
-            <div class="card-controls">
-              <div class="control-group">
-                <!-- Play speed selection -->
-                <label class="control-label">Speed: </label>
-                <select v-model="playSpeed" class="speed-select">
-                  <option :value="0.5">0.5x</option>
-                  <option :value="0.7">0.7x</option>
-                  <option :value="0.8">0.8x</option>
-                  <option :value="0.9">0.9x</option>
-                  <option :value="1.0">1.0x</option>
-                  <option :value="1.2">1.2x</option>
-                  <option :value="1.5">1.5x</option>
-                </select>
+          <!-- --- MAIN FOCUS DICTATION CANVAS --- -->
+          <div class="focus-card-canvas">
+            <div 
+              class="canvas-touch-zone"
+              @mousedown="handleMouseDown($event, getCurrentSegment)"
+              @touchstart="handleTouchStart($event, getCurrentSegment)"
+              @touchend="handleTouchEnd($event)"
+            >
+              <!-- Background Ambient Hint -->
+              <div class="ambient-hint">
+                <span class="hint-side">‹ Swipe</span>
+                <span class="hint-center">Tap to play / pause</span>
+                <span class="hint-side">Swipe ›</span>
               </div>
 
-              <div class="control-group" v-if="currentLessonMetadata.language === 'zh'">
-                <!-- Simplified / Traditional Chinese Switch -->
-                <button class="toggle-cc-btn" :class="{ active: simplified }" @click="simplified = !simplified">
-                  {{ simplified ? '简体中文' : '繁體中文' }}
-                </button>
-              </div>
-
-              <!-- Bookmark state button -->
-              <button 
-                class="bookmark-toggle" 
-                :class="{ bookmarked: currentLessonSegments[currentSegmentId]?.bookmarked }"
-                @click="toggleBookmark"
-              >
-                ★ {{ currentLessonSegments[currentSegmentId]?.bookmarked ? 'Bookmarked' : 'Bookmark' }}
-              </button>
-            </div>
-
-            <!-- Segment Info / Counter -->
-            <div class="segment-counter">
-              Sentence {{ currentSegmentId + 1 }} / {{ currentLessonSegments.length }}
-            </div>
-
-            <!-- Interactive Wave/Touch Overlay for double-clicks, gestures and tap-to-play -->
-            <div class="interactive-area-container">
-              <div 
-                class="touch-overlay"
-                @mousedown="handleMouseDown($event, getCurrentSegment)"
-                @touchstart="handleTouchStart($event, getCurrentSegment)"
-              >
-                <div class="overlay-hint">
-                  <span>← DblClick Left: Prev</span>
-                  <span>Tap: Play/Pause</span>
-                  <span>DblClick Right: Next &rarr;</span>
-                </div>
-              </div>
-
-              <!-- Word Chips Container -->
-              <div class="word-chips-container">
-                <div class="chips-flex">
+              <!-- Interactive Word Chips Display -->
+              <div class="words-container">
+                <div class="words-flex">
                   <span
                     v-for="(word, key) in filteredWords(getCurrentSegment?.words)"
                     :key="key"
-                    class="word-chip"
-                    :class="{ 'highlighted': isHighlighted(word), 'marked': word.marked }"
+                    class="focus-word-chip"
+                    :class="{ 
+                      'highlighted': isHighlighted(word), 
+                      'marked': word.marked,
+                      'is-masked': masked
+                    }"
                     @mousedown="handleMouseDownOnWord($event, word)"
                     @touchstart="handleMouseDownOnWord($event, word)"
                   >
-                    <span v-if="masked" class="masked-text">{{ getMaskedWord(word.word) }}</span>
+                    <span v-if="masked" class="masked-dots">{{ getMaskedWord(word.word) }}</span>
                     <span v-else class="revealed-text">{{ word.word }}</span>
                   </span>
                 </div>
               </div>
-            </div>
-
-            <!-- Show/Hide Hold Button -->
-            <div class="show-hide-control">
-              <button
-                class="hold-to-show-btn"
-                :class="{ active: !masked || keepShowing }"
-                @mousedown="toggleGlobalHide(true)"
-                @mouseup="keepShowing ? null : toggleGlobalHide(false)"
-                @mouseleave="keepShowing ? null : (masked = true)"
-                @touchstart="toggleGlobalHide(true)"
-                @touchend="keepShowing ? null : toggleGlobalHide(false)"
-              >
-                {{ keepShowing ? 'Showing Locked' : (masked ? 'Hold to Show' : 'Release to Hide') }}
-              </button>
-              <span class="btn-hint">Tip: Double tap to lock showing.</span>
             </div>
           </div>
 
@@ -706,453 +714,603 @@ function toggleGlobalHide(isVisible) {
         </div>
       </section>
     </main>
+
+    <!-- --- MOBILE STICKY THUMB CONTROL BAR --- -->
+    <div v-if="currentLessonId && currentLessonSegments.length > 0" class="bottom-sticky-bar">
+      <div class="bottom-bar-content">
+        <!-- Bookmark -->
+        <button 
+          class="thumb-btn bookmark-thumb-btn" 
+          :class="{ active: currentLessonSegments[currentSegmentId]?.bookmarked }"
+          @click="toggleBookmark"
+          title="Bookmark sentence"
+        >
+          <span class="thumb-icon">★</span>
+          <span class="thumb-label">Mark</span>
+        </button>
+
+        <!-- Previous -->
+        <button class="thumb-btn nav-thumb-btn" @click="getPreviousSegment" title="Previous Sentence">
+          <span class="thumb-icon">⏮</span>
+          <span class="thumb-label">Prev</span>
+        </button>
+
+        <!-- Play / Pause -->
+        <button class="thumb-btn play-thumb-btn" :class="{ playing: playing }" @click="togglePlayCurrentSegment" title="Play or Pause">
+          <span class="thumb-icon">{{ playing ? '⏸' : '▶' }}</span>
+          <span class="thumb-label">{{ playing ? 'Pause' : 'Play' }}</span>
+        </button>
+
+        <!-- Next -->
+        <button class="thumb-btn nav-thumb-btn" @click="getNextSegment" title="Next Sentence">
+          <span class="thumb-icon">⏭</span>
+          <span class="thumb-label">Next</span>
+        </button>
+
+        <!-- Hold to Peek -->
+        <button 
+          class="thumb-btn peek-thumb-btn"
+          :class="{ active: !masked || keepShowing }"
+          @mousedown="toggleGlobalHide(true)"
+          @mouseup="keepShowing ? null : toggleGlobalHide(false)"
+          @mouseleave="keepShowing ? null : (masked = true)"
+          @touchstart.prevent="toggleGlobalHide(true)"
+          @touchend.prevent="keepShowing ? null : toggleGlobalHide(false)"
+          title="Hold to Peek"
+        >
+          <span class="thumb-icon">👁️</span>
+          <span class="thumb-label">Peek</span>
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-/* Base container styling matching local system variables */
+/* ==========================================================================
+   MINIMAL MOBILE-FIRST DICTATION STYLES
+   ========================================================================== */
+
 .app-container {
-  max-width: 960px;
+  max-width: 640px;
   margin: 0 auto;
-  padding: 1rem;
-  font-family: var(--sans);
-  color: var(--text);
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
-  flex-column: column;
+  flex-direction: column;
+  background-color: var(--bg-main);
+  position: relative;
 }
 
+/* MINIMAL HEADER */
 .app-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(11, 15, 25, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--bg-card-border);
+  padding: 0.75rem 1.25rem;
+}
+
+.header-inner {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 0;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 2rem;
 }
 
-.app-title {
-  font-size: 1.5rem;
-  font-weight: 600;
-  color: var(--text-h);
-}
-
-.back-btn {
-  background: var(--code-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-h);
-  padding: 0.5rem 1rem;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
+.brand-title {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
 }
 
-.back-btn:hover {
-  background: var(--border);
-}
-
-.lang-tag {
-  background: var(--accent-bg);
-  border: 1px solid var(--accent-border);
-  color: var(--accent);
-  padding: 0.2rem 0.6rem;
+.brand-badge {
+  font-size: 0.65rem;
+  font-weight: 800;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.15rem 0.4rem;
   border-radius: 4px;
+  letter-spacing: 0.05em;
+}
+
+.minimal-back-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent-light);
+  font-size: 0.95rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+.minimal-back-btn .icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.speed-select-minimal {
+  background: var(--bg-card);
+  border: 1px solid var(--bg-card-border);
+  color: var(--text-secondary);
   font-size: 0.8rem;
   font-weight: 600;
-}
-
-.app-main {
-  flex-grow: 1;
-}
-
-.error-banner {
-  background: #fdf2f2;
-  border: 1px solid #f8b4b4;
-  color: #9b1c1c;
-  padding: 1rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 8px;
-  margin-bottom: 1.5rem;
-  font-size: 0.9rem;
-}
-
-/* LESSONS LIST STYLE */
-.section-title {
-  font-size: 1.5rem;
-  margin-bottom: 1.5rem;
-  color: var(--text-h);
-}
-
-.empty-state {
-  text-align: center;
-  padding: 3rem 1rem;
-  background: var(--code-bg);
-  border-radius: 12px;
-  border: 1px dashed var(--border);
-}
-
-.instruction-note {
-  margin-top: 1rem;
-  font-size: 0.9rem;
-  color: var(--text);
-}
-
-.instruction-note code {
-  background: var(--bg);
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-}
-
-.lessons-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 1.5rem;
-}
-
-.lesson-card {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1.5rem;
+  outline: none;
   cursor: pointer;
-  box-shadow: var(--shadow);
-  transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
-.lesson-card:hover {
-  transform: translateY(-4px);
-  border-color: var(--accent);
+.minimal-tag-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--bg-card-border);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 8px;
+  cursor: pointer;
 }
 
-.lesson-meta-top {
+/* APP MAIN CONTAINER */
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem 1.25rem;
+}
+
+.minimal-error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+/* LESSONS DASHBOARD */
+.lessons-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.section-header {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
+}
+
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+}
+
+.count-badge {
   font-size: 0.8rem;
-  color: var(--text);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.minimal-empty-state {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  background: var(--bg-card);
+  border: 1px dashed var(--bg-card-border);
+  border-radius: 16px;
+  color: var(--text-secondary);
+}
+
+.empty-icon {
+  font-size: 2.5rem;
   margin-bottom: 0.75rem;
 }
 
-.lesson-lang {
-  font-weight: 600;
-  color: var(--accent);
+.minimal-empty-state h3 {
+  font-size: 1.1rem;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
 }
 
-.lesson-card-title {
-  font-size: 1.15rem;
-  font-weight: 600;
-  color: var(--text-h);
-  margin: 0 0 1rem;
-  line-height: 1.3;
-}
-
-.lesson-stats {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.85rem;
-  margin-bottom: 1rem;
-  color: var(--text);
-}
-
-.bookmarked-count {
-  color: #d97706;
-  font-weight: 600;
-}
-
-/* SEGMENT PROGRESS BAR */
-.segment-bar {
-  display: flex;
-  gap: 3px;
-  height: 6px;
-  width: 100%;
-  background: var(--code-bg);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.segment-dot {
-  flex-grow: 1;
-  background: #e5e7eb;
-}
-
-.segment-dot.studied {
-  background: #10b981; /* Green */
-}
-
-.segment-dot.bookmarked {
-  background: #f59e0b; /* Yellow/Orange */
-}
-
-/* LESSON DETAIL / DICTATION */
-.dictation-workspace {
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-}
-
-.workspace-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.lesson-title {
-  font-size: 1.4rem;
-  font-weight: 600;
-  color: var(--text-h);
-  margin: 0;
-  max-width: 75%;
-}
-
-.source-link {
-  font-size: 0.9rem;
-  color: var(--accent);
-  text-decoration: none;
-}
-
-.source-link:hover {
-  text-decoration: underline;
-}
-
-.dictation-card {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 1.5rem;
-  box-shadow: var(--shadow);
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-  position: relative;
-}
-
-.card-controls {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 1rem;
-}
-
-.control-group {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.control-label {
-  font-size: 0.85rem;
-  font-weight: 500;
-}
-
-.speed-select {
-  padding: 0.3rem 0.5rem;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-h);
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-
-.toggle-cc-btn {
-  background: var(--code-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-h);
-  padding: 0.3rem 0.6rem;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-
-.toggle-cc-btn.active {
-  background: var(--accent-bg);
-  border-color: var(--accent-border);
-  color: var(--accent);
-}
-
-.bookmark-toggle {
-  background: var(--code-bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: #b45309;
-  padding: 0.3rem 0.8rem;
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.bookmark-toggle.bookmarked {
-  background: #fef3c7;
-  border-color: #fcd34d;
-  color: #b45309;
-}
-
-.segment-counter {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: var(--text);
-  text-align: center;
-}
-
-/* INTERACTIVE DICTATION CONTAINER */
-.interactive-area-container {
-  position: relative;
-  border-radius: 12px;
-  background: var(--code-bg);
-  padding: 2.5rem 1.5rem;
-  overflow: hidden;
-  min-height: 120px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.touch-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 1;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 0.5rem;
-}
-
-.overlay-hint {
-  display: flex;
-  justify-content: space-between;
-  width: 100%;
-  font-size: 0.72rem;
-  color: var(--text);
-  opacity: 0.3;
-  pointer-events: none;
-}
-
-.word-chips-container {
-  position: relative;
-  z-index: 2; /* Sits above touch overlay to receive click events on words */
-  width: 100%;
-  text-align: center;
-}
-
-.chips-flex {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  justify-content: center;
-}
-
-.word-chip {
-  background: var(--bg);
-  border: 1px solid var(--border);
+.minimal-empty-state code {
+  display: inline-block;
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--accent-light);
+  background: rgba(99, 102, 241, 0.1);
   padding: 0.4rem 0.8rem;
-  border-radius: 8px;
-  font-size: 1.1rem;
-  font-weight: 500;
-  color: var(--text-h);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  user-select: none;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  border-radius: 6px;
 }
 
-.word-chip:hover {
-  border-color: var(--accent);
-  background: var(--accent-bg);
-}
-
-.word-chip.highlighted {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: white;
-}
-
-.word-chip.highlighted .masked-text {
-  color: rgba(255, 255, 255, 0.7);
-}
-
-.word-chip.marked {
-  background: #d1fae5;
-  border-color: #34d399;
-  color: #065f46;
-}
-
-.masked-text {
-  letter-spacing: 0.1rem;
-  color: #a1a1aa;
-}
-
-/* HOLD TO SHOW CONTROL */
-.show-hide-control {
+.lessons-list {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
+  gap: 0.85rem;
 }
 
-.hold-to-show-btn {
-  width: 100%;
-  max-width: 280px;
-  padding: 1rem 1.5rem;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-h);
-  font-size: 1.1rem;
-  font-weight: 600;
+.minimal-lesson-card {
+  background: var(--bg-card);
+  border: 1px solid var(--bg-card-border);
+  border-radius: 16px;
+  padding: 1.15rem;
   cursor: pointer;
-  box-shadow: var(--shadow);
-  transition: all 0.15s ease;
+  transition: transform 0.15s ease, border-color 0.15s ease;
 }
 
-.hold-to-show-btn:hover {
-  background: var(--code-bg);
-}
-
-.hold-to-show-btn.active {
-  background: var(--accent-bg);
-  border-color: var(--accent-border);
-  color: var(--accent);
+.minimal-lesson-card:active {
   transform: scale(0.98);
 }
 
-.btn-hint {
-  font-size: 0.75rem;
-  color: var(--text);
-  opacity: 0.7;
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
 }
 
-/* GENERAL LOADER */
-.detail-loader {
+.lang-badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent-light);
+  background: rgba(99, 102, 241, 0.15);
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+}
+
+.card-date {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.card-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+  margin-bottom: 1rem;
+}
+
+.card-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.bookmark-badge {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.mini-progress-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.mini-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+/* ==========================================================================
+   MINIMAL DICTATION WORKSPACE
+   ========================================================================== */
+
+.dictation-focus-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.focus-workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 80px; /* space for fixed thumb bar */
+}
+
+/* TOP PROGRESS BAR */
+.workspace-top-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.sentence-counter strong {
+  color: var(--text-primary);
+}
+
+.percent-tag {
+  font-weight: 600;
+  color: var(--accent-light);
+}
+
+.top-progress-bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-light));
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* MAIN FOCUS CANVAS */
+.focus-card-canvas {
+  flex: 1;
+  min-height: 280px;
+  background: var(--bg-card);
+  border: 1px solid var(--bg-card-border);
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
+}
+
+.canvas-touch-zone {
+  width: 100%;
+  height: 100%;
+  min-height: 280px;
+  padding: 2rem 1.25rem;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 4rem 1rem;
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ambient-hint {
+  position: absolute;
+  top: 0.75rem;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 1rem;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.words-container {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.words-flex {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 0.5rem;
+  justify-content: center;
+  align-items: center;
+  max-width: 520px;
+}
+
+/* WORD CHIPS STYLE */
+.focus-word-chip {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.5rem 0.85rem;
+  border-radius: 12px;
+  font-size: 1.25rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+}
+
+.focus-word-chip.is-masked {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.focus-word-chip:active {
+  transform: scale(0.95);
+}
+
+/* HIGHLIGHTED WORD (VOICE TIMING) */
+.focus-word-chip.highlighted {
+  background: var(--accent);
+  border-color: var(--accent-light);
+  color: #ffffff;
+  box-shadow: 0 0 20px var(--accent-glow);
+  transform: scale(1.04);
+}
+
+.focus-word-chip.highlighted .masked-dots {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* MARKED WORD */
+.focus-word-chip.marked {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.masked-dots {
+  letter-spacing: 0.15rem;
+  color: #64748b;
+  font-family: var(--mono);
+}
+
+.revealed-text {
+  font-weight: 600;
+}
+
+/* MINIMAL LOADER */
+.minimal-loader {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 1rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
 }
 
-.spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
+.pulse-ring {
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 var(--accent-glow);
+  animation: pulse-ring 1.25s infinite cubic-bezier(0.215, 0.61, 0.355, 1);
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+@keyframes pulse-ring {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 var(--accent-glow); }
+  70% { transform: scale(1); box-shadow: 0 0 0 16px rgba(99, 102, 241, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
+}
+
+/* ==========================================================================
+   FIXED BOTTOM THUMB CONTROL BAR
+   ========================================================================== */
+
+.bottom-sticky-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: rgba(11, 15, 25, 0.9);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid var(--bg-card-border);
+  padding: 0.6rem 1rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
+}
+
+.bottom-bar-content {
+  max-width: 480px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.thumb-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--bg-card-border);
+  border-radius: 16px;
+  padding: 0.5rem 0.5rem;
+  flex: 1;
+  max-width: 68px;
+  min-height: 56px;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  transition: transform 0.1s ease, background-color 0.15s ease;
+}
+
+.thumb-btn:active {
+  transform: scale(0.92);
+}
+
+.thumb-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.thumb-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  margin-top: 4px;
+  color: var(--text-muted);
+}
+
+.play-thumb-btn {
+  background: var(--accent);
+  border-color: var(--accent-light);
+  color: white;
+  min-height: 60px;
+  box-shadow: 0 4px 14px var(--accent-glow);
+}
+
+.play-thumb-btn .thumb-label {
+  color: white;
+}
+
+.play-thumb-btn.playing {
+  background: #ef4444;
+  border-color: #f87171;
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35);
+}
+
+.bookmark-thumb-btn.active {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: var(--warning);
+}
+
+.bookmark-thumb-btn.active .thumb-label {
+  color: var(--warning);
+}
+
+.peek-thumb-btn.active {
+  background: rgba(99, 102, 241, 0.18);
+  border-color: var(--accent-light);
+  color: var(--accent-light);
+}
+
+.peek-thumb-btn.active .thumb-label {
+  color: var(--accent-light);
 }
 </style>
