@@ -1,5 +1,36 @@
-# Vue 3 + Vite
+# 🎧 Mobile Dictation App (Obsidian Integrated)
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+通勤電車での「片手操作」に最適化された、ミニマル＆集中型のディクテーション・リスニング学習Webアプリケーションです。
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+---
+
+## 🌟 主な機能・特徴
+
+* 📱 **モバイルファースト & 片手操作最適化**:
+  * 画面最下部の親指コントロールバー（`Play`, `Prev`, `Next`, `Peek`, `Mark`）
+  * セグメント切替のスワイプジェスチャー対応
+* 🎯 **集中できるミニマル・ダークデザイン**:
+  * 不要なUIノイズを排除したフォーカス・キャンバス
+  * 瞬間的な確認ができる「Hold to Peek（チラ見）」機能
+  * 音声タイミングに合わせた単語ハイライトエフェクト
+* ⚡ **Obsidian完全連動**:
+  * Obsidianダッシュボードでボタンを押すだけで、Whisper文字起こしノート作成とWeb教材データ化が全自動で完了
+
+---
+
+## 📖 新しい動画を追加する手順
+
+詳細な手順については、親ディレクトリの [手順書.md](../手順書.md) をご覧ください。
+
+1. `Dictation/Download_Queue.md` にYouTubeのURLを追加
+2. `Dictation/Dictation_Dashboard.md` で文字起こしボタンをクリック
+3. アプリを開いて即座にディクテーション学習スタート！
+
+---
+
+## 🚀 ローカル起動方法
+
+```bash
+npm install
+npm run dev
+```
