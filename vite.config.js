@@ -4,4 +4,8 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   plugins: [vue()],
   base: '/dictation-app/',
+  build: {
+    outDir: 'docs',
+    emptyOutDir: true
+  }
 })
