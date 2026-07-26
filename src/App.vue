@@ -332,12 +332,21 @@ function getMaskedWord(word) {
   return '•'.repeat(Math.max(word.length, 2))
 }
 
-// --- AUDIO PLAYER & NAVIGATION (CLEAN & DIRECT) ---
+// --- AUDIO PLAYER & NAVIGATION (ALWAYS SYNCED) ---
 function playFrom(start, end) {
   if (!audioPlayer.value) return
+  
+  stopTime.value = -1 // Reset stopTime during seek to avoid false triggers
+  try {
+    audioPlayer.value.currentTime = start
+    currentTime.value = start
+  } catch (e) {
+    console.error('Seek error:', e)
+  }
+  
   stopTime.value = end
-  audioPlayer.value.currentTime = start
   audioPlayer.value.playbackRate = playSpeed.value
+  
   audioPlayer.value.play().then(() => {
     playing.value = true
   }).catch(e => console.error('Play error', e))
@@ -401,10 +410,24 @@ watch(playSpeed, (newSpeed) => {
   }
 })
 
-watch(currentSegmentId, () => {
-  if (playing.value && audioPlayer.value) {
-    const seg = getCurrentSegment.value
-    if (seg) playFrom(getSegmentStart(seg), getSegmentEnd(seg))
+// Always sync audio position whenever currentSegmentId changes (playing or paused)
+watch(currentSegmentId, (newId) => {
+  const seg = currentLessonSegments.value?.[newId]
+  if (!seg || !audioPlayer.value) return
+  
+  const start = getSegmentStart(seg)
+  const end = getSegmentEnd(seg)
+  
+  stopTime.value = -1
+  try {
+    audioPlayer.value.currentTime = start
+    currentTime.value = start
+  } catch (e) {
+    console.error('Audio seek error:', e)
+  }
+  
+  if (playing.value) {
+    playFrom(start, end)
   }
 })
 
