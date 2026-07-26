@@ -35,15 +35,16 @@ const isSwiping = ref(false)
 
 function handlePeekStart() {
   clearTimeout(peekPressTimer)
-  if (keepShowing.value) return
-  
-  masked.value = false
   isLongPress.value = false
+  
+  if (!keepShowing.value) {
+    masked.value = false
+  }
   
   peekPressTimer = setTimeout(() => {
     isLongPress.value = true
-    keepShowing.value = true
-    masked.value = false
+    keepShowing.value = !keepShowing.value
+    masked.value = !keepShowing.value
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
       try { navigator.vibrate(40) } catch (e) {}
     }
