@@ -29,6 +29,16 @@ const touchStartX = ref(0)
 const touchStartY = ref(0)
 const isSwiping = ref(false)
 
+// Debug Overlay State
+const showDebug = ref(true)
+const debugLogs = ref([])
+
+function addDebugLog(msg) {
+  const time = new Date().toLocaleTimeString('ja-JP', { hour12: false })
+  debugLogs.value.unshift(`[${time}] ${msg}`)
+  if (debugLogs.value.length > 6) debugLogs.value.pop()
+}
+
 // Constants
 const gapThreshold = 0.1
 const errorSegmentThreshold = 5.0
@@ -299,7 +309,7 @@ function getMaskedWord(word) {
 function playFrom(start, end) {
   if (!audioPlayer.value) return
   
-  // 1. Force audio player to target start timestamp immediately
+  addDebugLog(`playFrom: start=${start.toFixed(2)}s, end=${end.toFixed(2)}s`)
   stopTime.value = -1
   try {
     audioPlayer.value.currentTime = start
@@ -311,20 +321,24 @@ function playFrom(start, end) {
   stopTime.value = end
   audioPlayer.value.playbackRate = playSpeed.value
   
-  // 2. Start playback directly from target timestamp
   audioPlayer.value.play().then(() => {
     playing.value = true
-    // Double-check currentTime after playback starts to ensure mobile browser didn't reset it
+    addDebugLog(`play() success. audio.currentTime=${audioPlayer.value.currentTime.toFixed(2)}s`)
     if (audioPlayer.value && Math.abs(audioPlayer.value.currentTime - start) > 2.0) {
+      addDebugLog(`⚠️ Mobile seek desync detected! Forcing currentTime back to ${start.toFixed(2)}s`)
       audioPlayer.value.currentTime = start
       currentTime.value = start
     }
-  }).catch(e => console.error('Play error:', e))
+  }).catch(e => {
+    addDebugLog(`⚠️ play() error: ${e.message}`)
+    console.error('Play error:', e)
+  })
 }
 
 function togglePlayCurrentSegment() {
   const seg = getCurrentSegment.value
   if (!seg) return
+  addDebugLog(`Toggle play (currently playing=${playing.value})`)
   if (playing.value) {
     audioPlayer.value?.pause()
     playing.value = false
@@ -339,6 +353,7 @@ function getPreviousSegment() {
   if (currentSegmentId.value > 0) {
     currentSegmentId.value--
     saveCurrentProgress()
+    addDebugLog(`Nav Prev -> Seg ID ${currentSegmentId.value}`)
     syncAudioToCurrentSegment()
   }
 }
@@ -347,6 +362,7 @@ function getNextSegment() {
   if (currentSegmentId.value < currentLessonSegments.value.length - 1) {
     currentSegmentId.value++
     saveCurrentProgress()
+    addDebugLog(`Nav Next -> Seg ID ${currentSegmentId.value}`)
     syncAudioToCurrentSegment()
   }
 }
@@ -443,6 +459,7 @@ function handleWordClick(word) {
   if (!seg) return
   const segEnd = getSegmentEnd(seg)
   const wordStart = (word && word.start !== undefined) ? word.start : getSegmentStart(seg)
+  addDebugLog(`Word '${word?.word}' clicked -> start=${wordStart.toFixed(2)}s`)
   
   playFrom(wordStart, segEnd)
 }
@@ -482,6 +499,9 @@ function setPeekActive(active) {
 
           <button v-if="currentLessonMetadata.language === 'zh'" class="minimal-tag-btn" @click="simplified = !simplified">
             {{ simplified ? '簡' : '繁' }}
+          </button>
+          <button class="minimal-tag-btn" @click="showDebug = !showDebug" style="border-color: rgba(239, 68, 68, 0.4); color: #f87171;">
+            🐞 Debug
           </button>
         </div>
       </div>
@@ -591,6 +611,38 @@ function setPeekActive(active) {
                   </span>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- --- REAL-TIME DEBUG OVERLAY PANEL --- -->
+          <div v-if="showDebug" class="debug-overlay-card">
+            <div class="debug-header">
+              <span>🐞 DEBUG PANEL</span>
+              <span class="debug-badge" :class="{ playing: playing }">{{ playing ? '▶ PLAYING' : '⏸ PAUSED' }}</span>
+            </div>
+
+            <div class="debug-grid">
+              <div class="debug-item">
+                <span class="lbl">Seg Index:</span>
+                <span class="val">{{ currentSegmentId }} / {{ currentLessonSegments.length - 1 }}</span>
+              </div>
+              <div class="debug-item">
+                <span class="lbl">Seg Range:</span>
+                <span class="val">{{ getSegmentStart(getCurrentSegment).toFixed(2) }}s ~ {{ getSegmentEnd(getCurrentSegment).toFixed(2) }}s</span>
+              </div>
+              <div class="debug-item">
+                <span class="lbl">Audio Time:</span>
+                <span class="val time-val">{{ currentTime.toFixed(2) }}s</span>
+              </div>
+              <div class="debug-item">
+                <span class="lbl">Stop Target:</span>
+                <span class="val">{{ stopTime > 0 ? stopTime.toFixed(2) + 's' : 'None' }}</span>
+              </div>
+            </div>
+
+            <div class="debug-logs-container">
+              <div class="logs-title">Event Logs (Last 6):</div>
+              <div v-for="(log, idx) in debugLogs" :key="idx" class="log-row">{{ log }}</div>
             </div>
           </div>
 
@@ -1204,5 +1256,81 @@ function setPeekActive(active) {
 
 .peek-thumb-btn.active .thumb-label {
   color: var(--accent-light);
+}
+
+/* REAL-TIME DEBUG OVERLAY PANEL */
+.debug-overlay-card {
+  margin-top: 1rem;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 16px;
+  padding: 0.85rem 1rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: #e2e8f0;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+}
+
+.debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  color: #f87171;
+  border-bottom: 1px dashed rgba(255,255,255,0.1);
+  padding-bottom: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.debug-badge {
+  font-size: 0.65rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.1);
+  color: var(--text-muted);
+}
+
+.debug-badge.playing {
+  background: #10b981;
+  color: #fff;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.debug-item .lbl {
+  color: #94a3b8;
+  margin-right: 0.25rem;
+}
+
+.debug-item .val {
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.debug-item .time-val {
+  color: #38bdf8;
+}
+
+.debug-logs-container {
+  border-top: 1px solid rgba(255,255,255,0.08);
+  padding-top: 0.4rem;
+  font-size: 0.72rem;
+}
+
+.logs-title {
+  color: #64748b;
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+
+.log-row {
+  color: #cbd5e1;
+  line-height: 1.3;
+  word-break: break-all;
 }
 </style>
