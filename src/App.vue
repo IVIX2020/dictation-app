@@ -295,34 +295,43 @@ function getMaskedWord(word) {
   return '•'.repeat(Math.max(word.length, 2))
 }
 
-// --- AUDIO PLAYER & NAVIGATION (ALWAYS SYNCED) ---
+// --- AUDIO PLAYER & STRICT TIMING SYNC ---
 function playFrom(start, end) {
   if (!audioPlayer.value) return
   
-  stopTime.value = -1 // Reset stopTime during seek to avoid false triggers
+  // 1. Force audio player to target start timestamp immediately
+  stopTime.value = -1
   try {
     audioPlayer.value.currentTime = start
     currentTime.value = start
   } catch (e) {
-    console.error('Seek error:', e)
+    console.error('Audio seek error:', e)
   }
   
   stopTime.value = end
   audioPlayer.value.playbackRate = playSpeed.value
   
+  // 2. Start playback directly from target timestamp
   audioPlayer.value.play().then(() => {
     playing.value = true
-  }).catch(e => console.error('Play error', e))
+    // Double-check currentTime after playback starts to ensure mobile browser didn't reset it
+    if (audioPlayer.value && Math.abs(audioPlayer.value.currentTime - start) > 2.0) {
+      audioPlayer.value.currentTime = start
+      currentTime.value = start
+    }
+  }).catch(e => console.error('Play error:', e))
 }
 
 function togglePlayCurrentSegment() {
-  const seg = currentLessonSegments.value?.[currentSegmentId.value]
+  const seg = getCurrentSegment.value
   if (!seg) return
   if (playing.value) {
     audioPlayer.value?.pause()
     playing.value = false
   } else {
-    playFrom(getSegmentStart(seg), getSegmentEnd(seg))
+    const start = getSegmentStart(seg)
+    const end = getSegmentEnd(seg)
+    playFrom(start, end)
   }
 }
 
@@ -330,6 +339,7 @@ function getPreviousSegment() {
   if (currentSegmentId.value > 0) {
     currentSegmentId.value--
     saveCurrentProgress()
+    syncAudioToCurrentSegment()
   }
 }
 
@@ -337,11 +347,31 @@ function getNextSegment() {
   if (currentSegmentId.value < currentLessonSegments.value.length - 1) {
     currentSegmentId.value++
     saveCurrentProgress()
+    syncAudioToCurrentSegment()
+  }
+}
+
+function syncAudioToCurrentSegment() {
+  const seg = getCurrentSegment.value
+  if (!seg || !audioPlayer.value) return
+  const start = getSegmentStart(seg)
+  const end = getSegmentEnd(seg)
+  
+  if (playing.value) {
+    playFrom(start, end)
+  } else {
+    stopTime.value = -1
+    try {
+      audioPlayer.value.currentTime = start
+      currentTime.value = start
+    } catch (e) {
+      console.error('Audio sync error:', e)
+    }
   }
 }
 
 function toggleBookmark() {
-  const seg = currentLessonSegments.value?.[currentSegmentId.value]
+  const seg = getCurrentSegment.value
   if (!seg) return
   seg.bookmarked = !seg.bookmarked
   saveCurrentProgress()
@@ -350,12 +380,14 @@ function toggleBookmark() {
 function onTimeUpdate() {
   if (!audioPlayer.value) return
   currentTime.value = audioPlayer.value.currentTime
+  
+  // Check if reached end of current segment
   if (stopTime.value > 0 && currentTime.value >= stopTime.value) {
     audioPlayer.value.pause()
     playing.value = false
     stopTime.value = -1
     
-    const seg = currentLessonSegments.value?.[currentSegmentId.value]
+    const seg = getCurrentSegment.value
     if (seg && !seg.studied) {
       seg.studied = true
       saveCurrentProgress()
@@ -373,28 +405,7 @@ watch(playSpeed, (newSpeed) => {
   }
 })
 
-// Always sync audio position whenever currentSegmentId changes (playing or paused)
-watch(currentSegmentId, (newId) => {
-  const seg = currentLessonSegments.value?.[newId]
-  if (!seg || !audioPlayer.value) return
-  
-  const start = getSegmentStart(seg)
-  const end = getSegmentEnd(seg)
-  
-  stopTime.value = -1
-  try {
-    audioPlayer.value.currentTime = start
-    currentTime.value = start
-  } catch (e) {
-    console.error('Audio seek error:', e)
-  }
-  
-  if (playing.value) {
-    playFrom(start, end)
-  }
-})
-
-// --- SIMPLE TOUCH & SWIPE HANDLERS (NO MULTI-TAP TIMERS) ---
+// Touch & Swipe handlers
 function handleCanvasTouchStart(event) {
   if (!event.touches || event.touches.length === 0) return
   touchStartX.value = event.touches[0].clientX
@@ -420,7 +431,6 @@ function handleCanvasTouchEnd(event) {
 }
 
 function handleCanvasClick() {
-  // If touch ended with a swipe, ignore the click to avoid double triggering
   if (isSwiping.value) {
     isSwiping.value = false
     return
@@ -429,10 +439,12 @@ function handleCanvasClick() {
 }
 
 function handleWordClick(word) {
-  const seg = currentLessonSegments.value?.[currentSegmentId.value]
-  if (seg) {
-    playFrom(word.start, getSegmentEnd(seg))
-  }
+  const seg = getCurrentSegment.value
+  if (!seg) return
+  const segEnd = getSegmentEnd(seg)
+  const wordStart = (word && word.start !== undefined) ? word.start : getSegmentStart(seg)
+  
+  playFrom(wordStart, segEnd)
 }
 
 function setPeekActive(active) {
