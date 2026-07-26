@@ -222,8 +222,15 @@ onBeforeUnmount(() => {
 })
 
 // --- TIMING / SPLITTING UTILS ---
-function getSegmentStart(seg) { return seg?.words[0]?.start ?? seg?.start ?? 0 }
-function getSegmentEnd(seg) { return seg?.words.at(-1)?.end ?? seg?.end ?? 0 }
+function getSegmentStart(seg) {
+  if (!seg) return 0
+  return seg.words?.[0]?.start ?? seg.start ?? 0
+}
+
+function getSegmentEnd(seg) {
+  if (!seg) return 0
+  return seg.words?.[seg.words.length - 1]?.end ?? seg.end ?? 0
+}
 function getSegmentDuration(seg) { return getSegmentEnd(seg) - getSegmentStart(seg) }
 
 function prepareSegmentWords(segment, language) {
@@ -579,6 +586,38 @@ function setPeekActive(active) {
             </div>
           </div>
 
+          <!-- --- REAL-TIME DEBUG OVERLAY PANEL (Prominent Top Placement) --- -->
+          <div v-if="showDebug" class="debug-overlay-card">
+            <div class="debug-header">
+              <span>🐞 DEBUG PANEL</span>
+              <span class="debug-badge" :class="{ playing: playing }">{{ playing ? '▶ PLAYING' : '⏸ PAUSED' }}</span>
+            </div>
+
+            <div class="debug-grid">
+              <div class="debug-item">
+                <span class="lbl">Seg Index:</span>
+                <span class="val">{{ currentSegmentId }} / {{ currentLessonSegments.length - 1 }}</span>
+              </div>
+              <div class="debug-item">
+                <span class="lbl">Seg Range:</span>
+                <span class="val">{{ getSegmentStart(getCurrentSegment).toFixed(2) }}s ~ {{ getSegmentEnd(getCurrentSegment).toFixed(2) }}s</span>
+              </div>
+              <div class="debug-item">
+                <span class="lbl">Audio Time:</span>
+                <span class="val time-val">{{ currentTime.toFixed(2) }}s</span>
+              </div>
+              <div class="debug-item">
+                <span class="lbl">Stop Target:</span>
+                <span class="val">{{ stopTime > 0 ? stopTime.toFixed(2) + 's' : 'None' }}</span>
+              </div>
+            </div>
+
+            <div class="debug-logs-container">
+              <div class="logs-title">Event Logs (Last 6):</div>
+              <div v-for="(log, idx) in debugLogs" :key="idx" class="log-row">{{ log }}</div>
+            </div>
+          </div>
+
           <!-- --- MAIN FOCUS DICTATION CANVAS --- -->
           <div class="focus-card-canvas">
             <div 
@@ -611,38 +650,6 @@ function setPeekActive(active) {
                   </span>
                 </div>
               </div>
-            </div>
-          </div>
-
-          <!-- --- REAL-TIME DEBUG OVERLAY PANEL --- -->
-          <div v-if="showDebug" class="debug-overlay-card">
-            <div class="debug-header">
-              <span>🐞 DEBUG PANEL</span>
-              <span class="debug-badge" :class="{ playing: playing }">{{ playing ? '▶ PLAYING' : '⏸ PAUSED' }}</span>
-            </div>
-
-            <div class="debug-grid">
-              <div class="debug-item">
-                <span class="lbl">Seg Index:</span>
-                <span class="val">{{ currentSegmentId }} / {{ currentLessonSegments.length - 1 }}</span>
-              </div>
-              <div class="debug-item">
-                <span class="lbl">Seg Range:</span>
-                <span class="val">{{ getSegmentStart(getCurrentSegment).toFixed(2) }}s ~ {{ getSegmentEnd(getCurrentSegment).toFixed(2) }}s</span>
-              </div>
-              <div class="debug-item">
-                <span class="lbl">Audio Time:</span>
-                <span class="val time-val">{{ currentTime.toFixed(2) }}s</span>
-              </div>
-              <div class="debug-item">
-                <span class="lbl">Stop Target:</span>
-                <span class="val">{{ stopTime > 0 ? stopTime.toFixed(2) + 's' : 'None' }}</span>
-              </div>
-            </div>
-
-            <div class="debug-logs-container">
-              <div class="logs-title">Event Logs (Last 6):</div>
-              <div v-for="(log, idx) in debugLogs" :key="idx" class="log-row">{{ log }}</div>
             </div>
           </div>
 
