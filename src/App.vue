@@ -27,15 +27,7 @@ const simplified = ref(false)
 // Touch & Gesture state
 const touchStartX = ref(0)
 const touchStartY = ref(0)
-
-// Double / Triple click handlers
-const lastClickTimeOn = ref({ time: 0, element: '' })
-const lastDoubleClickTimeOn = ref({ time: 0, element: '' })
-const lastClickTime = ref(0)
-const lastDoubleClickTime = ref(0)
-const doubleClickTime = 300
-const tripleClickTime = 300
-let doubleClickTimeout = null
+const isSwiping = ref(false)
 
 // Constants
 const gapThreshold = 0.1
@@ -337,11 +329,10 @@ function isHighlighted(word) {
 
 function getMaskedWord(word) {
   if (!word) return ''
-  // Return clean bullet dots for masking
   return '•'.repeat(Math.max(word.length, 2))
 }
 
-// --- AUDIO PLAYER & TIMING ---
+// --- AUDIO PLAYER & NAVIGATION (CLEAN & DIRECT) ---
 function playFrom(start, end) {
   if (!audioPlayer.value) return
   stopTime.value = end
@@ -352,6 +343,38 @@ function playFrom(start, end) {
   }).catch(e => console.error('Play error', e))
 }
 
+function togglePlayCurrentSegment() {
+  const seg = currentLessonSegments.value?.[currentSegmentId.value]
+  if (!seg) return
+  if (playing.value) {
+    audioPlayer.value?.pause()
+    playing.value = false
+  } else {
+    playFrom(getSegmentStart(seg), getSegmentEnd(seg))
+  }
+}
+
+function getPreviousSegment() {
+  if (currentSegmentId.value > 0) {
+    currentSegmentId.value--
+    saveCurrentProgress()
+  }
+}
+
+function getNextSegment() {
+  if (currentSegmentId.value < currentLessonSegments.value.length - 1) {
+    currentSegmentId.value++
+    saveCurrentProgress()
+  }
+}
+
+function toggleBookmark() {
+  const seg = currentLessonSegments.value?.[currentSegmentId.value]
+  if (!seg) return
+  seg.bookmarked = !seg.bookmarked
+  saveCurrentProgress()
+}
+
 function onTimeUpdate() {
   if (!audioPlayer.value) return
   currentTime.value = audioPlayer.value.currentTime
@@ -360,7 +383,6 @@ function onTimeUpdate() {
     playing.value = false
     stopTime.value = -1
     
-    // Mark studied
     const seg = currentLessonSegments.value?.[currentSegmentId.value]
     if (seg && !seg.studied) {
       seg.studied = true
@@ -386,61 +408,23 @@ watch(currentSegmentId, () => {
   }
 })
 
-// --- MOUSE & TOUCH GESTURES ---
-function handleMouseDown(event, segment) {
-  const rect = event.currentTarget.getBoundingClientRect()
-  const clickX = event.clientX - rect.left
-  const isLeft = clickX < rect.width / 2
-  const currTime = Date.now()
-
-  if (currTime - lastDoubleClickTime.value < tripleClickTime) {
-    clearTimeout(doubleClickTimeout)
-    handleTripleClick(isLeft)
-  } else if (currTime - lastClickTime.value < doubleClickTime) {
-    lastDoubleClickTime.value = currTime
-    doubleClickTimeout = setTimeout(() => {
-      handleDoubleClick(isLeft)
-    }, tripleClickTime)
-  } else {
-    handleTap(segment)
-  }
-
-  lastClickTime.value = currTime
+// --- SIMPLE TOUCH & SWIPE HANDLERS (NO MULTI-TAP TIMERS) ---
+function handleCanvasTouchStart(event) {
+  if (!event.touches || event.touches.length === 0) return
+  touchStartX.value = event.touches[0].clientX
+  touchStartY.value = event.touches[0].clientY
+  isSwiping.value = false
 }
 
-function handleTouchStart(event, segment) {
-  event.preventDefault()
-  const touch = event.touches[0]
-  touchStartX.value = touch.clientX
-  touchStartY.value = touch.clientY
-  const rect = event.currentTarget.getBoundingClientRect()
-  const clickX = touch.clientX - rect.left
-  const isLeft = clickX < rect.width / 2
-  const currTime = Date.now()
-
-  if (currTime - lastDoubleClickTime.value < tripleClickTime) {
-    clearTimeout(doubleClickTimeout)
-    handleTripleClick(isLeft)
-  } else if (currTime - lastClickTime.value < doubleClickTime) {
-    lastDoubleClickTime.value = currTime
-    doubleClickTimeout = setTimeout(() => {
-      handleDoubleClick(isLeft)
-    }, tripleClickTime)
-  } else {
-    handleTap(segment)
-  }
-
-  lastClickTime.value = currTime
-}
-
-function handleTouchEnd(event) {
+function handleCanvasTouchEnd(event) {
   if (!event.changedTouches || event.changedTouches.length === 0) return
   const touchEnd = event.changedTouches[0]
   const diffX = touchEnd.clientX - touchStartX.value
   const diffY = touchEnd.clientY - touchStartY.value
-  const minSwipeDistance = 40
+  const minSwipeDistance = 35
 
   if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > minSwipeDistance) {
+    isSwiping.value = true
     if (diffX < 0) {
       getNextSegment()
     } else {
@@ -449,110 +433,25 @@ function handleTouchEnd(event) {
   }
 }
 
-function togglePlayCurrentSegment() {
+function handleCanvasClick() {
+  // If touch ended with a swipe, ignore the click to avoid double triggering
+  if (isSwiping.value) {
+    isSwiping.value = false
+    return
+  }
+  togglePlayCurrentSegment()
+}
+
+function handleWordClick(word) {
   const seg = currentLessonSegments.value?.[currentSegmentId.value]
-  if (!seg) return
-  if (playing.value) {
-    audioPlayer.value?.pause()
-    playing.value = false
-  } else {
-    playFrom(getSegmentStart(seg), getSegmentEnd(seg))
+  if (seg) {
+    playFrom(word.start, getSegmentEnd(seg))
   }
 }
 
-function handleTap(segment) {
-  if (!segment) return
-  if (playing.value) {
-    audioPlayer.value?.pause()
-    playing.value = false
-  } else {
-    playFrom(getSegmentStart(segment), getSegmentEnd(segment))
-  }
-}
-
-function handleDoubleClick(isLeft) {
-  isLeft ? getPreviousSegment() : getNextSegment()
-}
-
-function handleTripleClick(isLeft) {
-  isLeft ? getPreviousBookmarkedSegment() : getNextBookmarkedSegment()
-}
-
-function getPreviousSegment() {
-  if (currentSegmentId.value > 0) {
-    currentSegmentId.value--
-    saveCurrentProgress()
-  }
-}
-
-function getNextSegment() {
-  if (currentSegmentId.value < currentLessonSegments.value.length - 1) {
-    currentSegmentId.value++
-    saveCurrentProgress()
-  }
-}
-
-function getPreviousBookmarkedSegment() {
-  for (let i = currentSegmentId.value - 1; i >= 0; i--) {
-    if (currentLessonSegments.value[i].bookmarked) {
-      currentSegmentId.value = i
-      saveCurrentProgress()
-      break
-    }
-  }
-}
-
-function getNextBookmarkedSegment() {
-  for (let i = currentSegmentId.value + 1; i < currentLessonSegments.value.length; i++) {
-    if (currentLessonSegments.value[i].bookmarked) {
-      currentSegmentId.value = i
-      saveCurrentProgress()
-      break
-    }
-  }
-}
-
-function toggleBookmark() {
-  const seg = currentLessonSegments.value?.[currentSegmentId.value]
-  if (!seg) return
-  seg.bookmarked = !seg.bookmarked
-  saveCurrentProgress()
-}
-
-function handleMouseDownOnWord(event, word) {
-  event.preventDefault()
-  event.stopPropagation()
-  const currTime = Date.now()
-  
-  if (currTime - lastDoubleClickTimeOn.value.time < doubleClickTime && lastDoubleClickTimeOn.value.element === 'word') {
-    word.marked = !word.marked
-    if (word.marked) {
-      const seg = currentLessonSegments.value?.[currentSegmentId.value]
-      if (seg) seg.bookmarked = true
-    }
-    saveCurrentProgress()
-  } else if (currTime - lastClickTimeOn.value.time < doubleClickTime && lastClickTimeOn.value.element === 'word') {
-    lastDoubleClickTimeOn.value = { time: currTime, element: 'word' }
-  } else {
-    const seg = currentLessonSegments.value?.[currentSegmentId.value]
-    const segEnd = getSegmentEnd(seg)
-    playFrom(word.start, segEnd)
-    lastClickTimeOn.value = { time: currTime, element: 'word' }
-  }
-}
-
-// Global Hide Trigger
-function toggleGlobalHide(isVisible) {
-  const now = Date.now()
-  const last = lastClickTimeOn.value
+function setPeekActive(active) {
   keepShowing.value = false
-  if (now - last.time < doubleClickTime && last.element === 'hide' && isVisible) {
-    keepShowing.value = true
-    masked.value = false
-  } else {
-    masked.value = !isVisible
-    lastClickTimeOn.value = { time: now, element: 'hide' }
-  }
+  masked.value = !active
 }
 </script>
 
@@ -573,7 +472,6 @@ function toggleGlobalHide(isVisible) {
         </div>
 
         <div class="header-right" v-if="currentLessonId && currentLessonMetadata">
-          <!-- Speed control pill -->
           <div class="speed-pill">
             <select v-model="playSpeed" class="speed-select-minimal">
               <option :value="0.7">0.7x</option>
@@ -658,7 +556,6 @@ function toggleGlobalHide(isVisible) {
               <span class="percent-tag">{{ currentProgressPercent }}%</span>
             </div>
             
-            <!-- Thin Line Progress Bar -->
             <div class="top-progress-bar">
               <div class="progress-fill" :style="{ width: `${currentProgressPercent}%` }"></div>
             </div>
@@ -668,18 +565,16 @@ function toggleGlobalHide(isVisible) {
           <div class="focus-card-canvas">
             <div 
               class="canvas-touch-zone"
-              @mousedown="handleMouseDown($event, getCurrentSegment)"
-              @touchstart="handleTouchStart($event, getCurrentSegment)"
-              @touchend="handleTouchEnd($event)"
+              @touchstart="handleCanvasTouchStart"
+              @touchend="handleCanvasTouchEnd"
+              @click="handleCanvasClick"
             >
-              <!-- Background Ambient Hint -->
               <div class="ambient-hint">
-                <span class="hint-side">‹ Swipe</span>
+                <span class="hint-side">‹ Swipe Prev</span>
                 <span class="hint-center">Tap to play / pause</span>
-                <span class="hint-side">Swipe ›</span>
+                <span class="hint-side">Swipe Next ›</span>
               </div>
 
-              <!-- Interactive Word Chips Display -->
               <div class="words-container">
                 <div class="words-flex">
                   <span
@@ -691,8 +586,7 @@ function toggleGlobalHide(isVisible) {
                       'marked': word.marked,
                       'is-masked': masked
                     }"
-                    @mousedown="handleMouseDownOnWord($event, word)"
-                    @touchstart="handleMouseDownOnWord($event, word)"
+                    @click.stop="handleWordClick(word)"
                   >
                     <span v-if="masked" class="masked-dots">{{ getMaskedWord(word.word) }}</span>
                     <span v-else class="revealed-text">{{ word.word }}</span>
@@ -729,7 +623,7 @@ function toggleGlobalHide(isVisible) {
           <span class="thumb-label">Mark</span>
         </button>
 
-        <!-- Previous -->
+        <!-- Previous Segment -->
         <button class="thumb-btn nav-thumb-btn" @click="getPreviousSegment" title="Previous Sentence">
           <span class="thumb-icon">⏮</span>
           <span class="thumb-label">Prev</span>
@@ -741,7 +635,7 @@ function toggleGlobalHide(isVisible) {
           <span class="thumb-label">{{ playing ? 'Pause' : 'Play' }}</span>
         </button>
 
-        <!-- Next -->
+        <!-- Next Segment -->
         <button class="thumb-btn nav-thumb-btn" @click="getNextSegment" title="Next Sentence">
           <span class="thumb-icon">⏭</span>
           <span class="thumb-label">Next</span>
@@ -751,11 +645,11 @@ function toggleGlobalHide(isVisible) {
         <button 
           class="thumb-btn peek-thumb-btn"
           :class="{ active: !masked || keepShowing }"
-          @mousedown="toggleGlobalHide(true)"
-          @mouseup="keepShowing ? null : toggleGlobalHide(false)"
-          @mouseleave="keepShowing ? null : (masked = true)"
-          @touchstart.prevent="toggleGlobalHide(true)"
-          @touchend.prevent="keepShowing ? null : toggleGlobalHide(false)"
+          @mousedown="setPeekActive(true)"
+          @mouseup="setPeekActive(false)"
+          @mouseleave="setPeekActive(false)"
+          @touchstart.prevent="setPeekActive(true)"
+          @touchend.prevent="setPeekActive(false)"
           title="Hold to Peek"
         >
           <span class="thumb-icon">👁️</span>
@@ -1036,7 +930,7 @@ function toggleGlobalHide(isVisible) {
   flex-direction: column;
   justify-content: space-between;
   gap: 1rem;
-  padding-bottom: 80px; /* space for fixed thumb bar */
+  padding-bottom: 80px;
 }
 
 /* TOP PROGRESS BAR */
