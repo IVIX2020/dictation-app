@@ -217,7 +217,13 @@ function getSegmentEnd(seg) { return seg?.words.at(-1)?.end ?? seg?.end ?? 0 }
 function getSegmentDuration(seg) { return getSegmentEnd(seg) - getSegmentStart(seg) }
 
 function prepareSegmentWords(segment, language) {
-  if (segment.words && segment.words.length > 0) return segment.words
+  if (segment.words && segment.words.length > 0) {
+    return segment.words.map(w => ({
+      word: w.word || w.text || '',
+      start: w.start ?? segment.start ?? 0,
+      end: w.end ?? segment.end ?? 0
+    }))
+  }
   
   const text = segment.text || ''
   const segStart = segment.start || 0
@@ -237,7 +243,7 @@ function prepareSegmentWords(segment, language) {
     return [{ word: text, start: segStart, end: segEnd }]
   }
   
-  const step = duration / tokens.length
+  const step = duration / Math.max(tokens.length, 1)
   return tokens.map((token, index) => ({
     word: token,
     start: segStart + index * step,
@@ -247,55 +253,12 @@ function prepareSegmentWords(segment, language) {
 
 function filteredSegments(segments, language) {
   if (!segments) return []
-  const processed = segments.map(s => ({
+  return segments.map(s => ({
     ...s,
-    words: prepareSegmentWords(s, language)
+    words: prepareSegmentWords(s, language),
+    start: getSegmentStart(s),
+    end: getSegmentEnd(s)
   }))
-  return processed.flatMap(s => splitSegmentByGapRecursive(s, gapThreshold, errorSegmentThreshold))
-}
-
-function splitSegmentByGapRecursive(segment, gapThreshold, maxLength) {
-  let segments = splitSegment(segment, gapThreshold)
-  while (segments.some(s => getSegmentDuration(s) > maxLength)) {
-    const temp = segments.flatMap(s =>
-      getSegmentDuration(s) > maxLength ? splitSegment(s, gapThreshold) : s
-    )
-    if (temp.length === segments.length) break
-    segments = temp
-  }
-  return segments
-}
-
-function splitSegment(segment, gapThreshold) {
-  const segments = []
-  const words = segment.words || []
-  let currentWords = []
-  let currentStart = getSegmentStart(segment)
-
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i]
-    currentWords.push(word)
-    const nextStart = words[i + 1]?.start ?? word.end
-    if (nextStart - word.end >= gapThreshold) {
-      segments.push({
-        ...segment,
-        words: currentWords,
-        start: currentStart,
-        end: word.end
-      })
-      currentWords = []
-      currentStart = nextStart
-    }
-  }
-  if (currentWords.length) {
-    segments.push({
-      ...segment,
-      words: currentWords,
-      start: currentStart,
-      end: words.at(-1)?.end ?? segment.end
-    })
-  }
-  return segments
 }
 
 // --- COMPUTED PROPERTIES ---
