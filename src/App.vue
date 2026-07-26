@@ -24,24 +24,43 @@ const masked = ref(true)
 const keepShowing = ref(false)
 const simplified = ref(false)
 
-// Touch & Gesture state
+// Peek & Long Press state
+let peekPressTimer = null
+const isLongPress = ref(false)
+
+// Touch & Swipe state
 const touchStartX = ref(0)
 const touchStartY = ref(0)
 const isSwiping = ref(false)
-const lastPeekClickTime = ref(0)
 
-function setPeekActive(active) {
+function handlePeekStart() {
+  clearTimeout(peekPressTimer)
   if (keepShowing.value) return
-  masked.value = !active
+  
+  masked.value = false
+  isLongPress.value = false
+  
+  peekPressTimer = setTimeout(() => {
+    isLongPress.value = true
+    keepShowing.value = true
+    masked.value = false
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      try { navigator.vibrate(40) } catch (e) {}
+    }
+  }, 500)
 }
 
-function handlePeekClick() {
-  const now = Date.now()
-  if (now - lastPeekClickTime.value < 350) {
-    keepShowing.value = !keepShowing.value
-    masked.value = !keepShowing.value
+function handlePeekEnd() {
+  clearTimeout(peekPressTimer)
+  if (isLongPress.value) return
+  if (!keepShowing.value) {
+    masked.value = true
   }
-  lastPeekClickTime.value = now
+}
+
+function togglePeekLockDirect() {
+  keepShowing.value = !keepShowing.value
+  masked.value = !keepShowing.value
 }
 
 // Constants
@@ -654,17 +673,16 @@ function handleWordClick(word) {
           <span class="thumb-label">Next</span>
         </button>
 
-        <!-- Hold to Peek / Double Tap to Lock -->
+        <!-- Hold to Peek / Long Press 500ms to Lock -->
         <button 
           class="thumb-btn peek-thumb-btn"
           :class="{ active: !masked || keepShowing }"
-          @mousedown="setPeekActive(true)"
-          @mouseup="setPeekActive(false)"
-          @mouseleave="setPeekActive(false)"
-          @touchstart.prevent="setPeekActive(true)"
-          @touchend.prevent="setPeekActive(false)"
-          @click="handlePeekClick"
-          title="Hold to Peek / Double Tap to Lock"
+          @mousedown="handlePeekStart"
+          @mouseup="handlePeekEnd"
+          @mouseleave="handlePeekEnd"
+          @touchstart.prevent="handlePeekStart"
+          @touchend.prevent="handlePeekEnd"
+          title="Hold to Peek / Press 500ms to Lock"
         >
           <span class="thumb-icon">{{ keepShowing ? '🔓' : '👁️' }}</span>
           <span class="thumb-label">{{ keepShowing ? 'Locked' : 'Peek' }}</span>
