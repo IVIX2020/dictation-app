@@ -28,15 +28,20 @@ const simplified = ref(false)
 const touchStartX = ref(0)
 const touchStartY = ref(0)
 const isSwiping = ref(false)
+const lastPeekClickTime = ref(0)
 
-// Debug Overlay State
-const showDebug = ref(true)
-const debugLogs = ref([])
+function setPeekActive(active) {
+  if (keepShowing.value) return
+  masked.value = !active
+}
 
-function addDebugLog(msg) {
-  const time = new Date().toLocaleTimeString('ja-JP', { hour12: false })
-  debugLogs.value.unshift(`[${time}] ${msg}`)
-  if (debugLogs.value.length > 6) debugLogs.value.pop()
+function handlePeekClick() {
+  const now = Date.now()
+  if (now - lastPeekClickTime.value < 350) {
+    keepShowing.value = !keepShowing.value
+    masked.value = !keepShowing.value
+  }
+  lastPeekClickTime.value = now
 }
 
 // Constants
@@ -316,7 +321,6 @@ function getMaskedWord(word) {
 function playFrom(start, end) {
   if (!audioPlayer.value) return
   
-  addDebugLog(`playFrom: start=${start.toFixed(2)}s, end=${end.toFixed(2)}s`)
   stopTime.value = -1
   try {
     audioPlayer.value.currentTime = start
@@ -330,14 +334,11 @@ function playFrom(start, end) {
   
   audioPlayer.value.play().then(() => {
     playing.value = true
-    addDebugLog(`play() success. audio.currentTime=${audioPlayer.value.currentTime.toFixed(2)}s`)
     if (audioPlayer.value && Math.abs(audioPlayer.value.currentTime - start) > 2.0) {
-      addDebugLog(`⚠️ Mobile seek desync detected! Forcing currentTime back to ${start.toFixed(2)}s`)
       audioPlayer.value.currentTime = start
       currentTime.value = start
     }
   }).catch(e => {
-    addDebugLog(`⚠️ play() error: ${e.message}`)
     console.error('Play error:', e)
   })
 }
@@ -345,7 +346,6 @@ function playFrom(start, end) {
 function togglePlayCurrentSegment() {
   const seg = getCurrentSegment.value
   if (!seg) return
-  addDebugLog(`Toggle play (currently playing=${playing.value})`)
   if (playing.value) {
     audioPlayer.value?.pause()
     playing.value = false
@@ -360,7 +360,6 @@ function getPreviousSegment() {
   if (currentSegmentId.value > 0) {
     currentSegmentId.value--
     saveCurrentProgress()
-    addDebugLog(`Nav Prev -> Seg ID ${currentSegmentId.value}`)
     syncAudioToCurrentSegment()
   }
 }
@@ -369,7 +368,6 @@ function getNextSegment() {
   if (currentSegmentId.value < currentLessonSegments.value.length - 1) {
     currentSegmentId.value++
     saveCurrentProgress()
-    addDebugLog(`Nav Next -> Seg ID ${currentSegmentId.value}`)
     syncAudioToCurrentSegment()
   }
 }
@@ -404,7 +402,6 @@ function onTimeUpdate() {
   if (!audioPlayer.value) return
   currentTime.value = audioPlayer.value.currentTime
   
-  // Check if reached end of current segment
   if (stopTime.value > 0 && currentTime.value >= stopTime.value) {
     audioPlayer.value.pause()
     playing.value = false
@@ -466,14 +463,8 @@ function handleWordClick(word) {
   if (!seg) return
   const segEnd = getSegmentEnd(seg)
   const wordStart = (word && word.start !== undefined) ? word.start : getSegmentStart(seg)
-  addDebugLog(`Word '${word?.word}' clicked -> start=${wordStart.toFixed(2)}s`)
   
   playFrom(wordStart, segEnd)
-}
-
-function setPeekActive(active) {
-  keepShowing.value = false
-  masked.value = !active
 }
 </script>
 
@@ -506,9 +497,6 @@ function setPeekActive(active) {
 
           <button v-if="currentLessonMetadata.language === 'zh'" class="minimal-tag-btn" @click="simplified = !simplified">
             {{ simplified ? '簡' : '繁' }}
-          </button>
-          <button class="minimal-tag-btn" @click="showDebug = !showDebug" style="border-color: rgba(239, 68, 68, 0.4); color: #f87171;">
-            🐞 Debug
           </button>
         </div>
       </div>
@@ -583,38 +571,6 @@ function setPeekActive(active) {
             
             <div class="top-progress-bar">
               <div class="progress-fill" :style="{ width: `${currentProgressPercent}%` }"></div>
-            </div>
-          </div>
-
-          <!-- --- REAL-TIME DEBUG OVERLAY PANEL (Prominent Top Placement) --- -->
-          <div v-if="showDebug" class="debug-overlay-card">
-            <div class="debug-header">
-              <span>🐞 DEBUG PANEL</span>
-              <span class="debug-badge" :class="{ playing: playing }">{{ playing ? '▶ PLAYING' : '⏸ PAUSED' }}</span>
-            </div>
-
-            <div class="debug-grid">
-              <div class="debug-item">
-                <span class="lbl">Seg Index:</span>
-                <span class="val">{{ currentSegmentId }} / {{ currentLessonSegments.length - 1 }}</span>
-              </div>
-              <div class="debug-item">
-                <span class="lbl">Seg Range:</span>
-                <span class="val">{{ getSegmentStart(getCurrentSegment).toFixed(2) }}s ~ {{ getSegmentEnd(getCurrentSegment).toFixed(2) }}s</span>
-              </div>
-              <div class="debug-item">
-                <span class="lbl">Audio Time:</span>
-                <span class="val time-val">{{ currentTime.toFixed(2) }}s</span>
-              </div>
-              <div class="debug-item">
-                <span class="lbl">Stop Target:</span>
-                <span class="val">{{ stopTime > 0 ? stopTime.toFixed(2) + 's' : 'None' }}</span>
-              </div>
-            </div>
-
-            <div class="debug-logs-container">
-              <div class="logs-title">Event Logs (Last 6):</div>
-              <div v-for="(log, idx) in debugLogs" :key="idx" class="log-row">{{ log }}</div>
             </div>
           </div>
 
@@ -698,7 +654,7 @@ function setPeekActive(active) {
           <span class="thumb-label">Next</span>
         </button>
 
-        <!-- Hold to Peek -->
+        <!-- Hold to Peek / Double Tap to Lock -->
         <button 
           class="thumb-btn peek-thumb-btn"
           :class="{ active: !masked || keepShowing }"
@@ -707,10 +663,11 @@ function setPeekActive(active) {
           @mouseleave="setPeekActive(false)"
           @touchstart.prevent="setPeekActive(true)"
           @touchend.prevent="setPeekActive(false)"
-          title="Hold to Peek"
+          @click="handlePeekClick"
+          title="Hold to Peek / Double Tap to Lock"
         >
-          <span class="thumb-icon">👁️</span>
-          <span class="thumb-label">Peek</span>
+          <span class="thumb-icon">{{ keepShowing ? '🔓' : '👁️' }}</span>
+          <span class="thumb-label">{{ keepShowing ? 'Locked' : 'Peek' }}</span>
         </button>
       </div>
     </div>
